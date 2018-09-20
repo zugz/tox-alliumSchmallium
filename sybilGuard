@@ -1,0 +1,311 @@
+These are unfinished notes on adapting SybilGuard (/SybilLimit) to not leak 
+the friend graph. But I gave up on it on realising the:
+
+## Fundamental problem
+To prevent tracking, each time you connect to the network it should be 
+impossible for non-friends to distinguish you from anyone else who's just 
+connected to the network. But then there's no way for them to know you are not 
+sybil.
+
+## Generalities
+
+Which component we're in should not be revealed to the rest of the network, 
+but can be revealed to our component. However we should reveal as little as 
+possible about our location in the component.
+
+Note: this notion of friend can't be quite the same as the usual one, because 
+bots can't be trusted not to have most of their friends be a sybil. Nor should 
+it be used for multiple ToxIDs of the same human. It should apply only to 
+"social" friends, such that the small world assumption can be expected to 
+hold.
+
+
+For any of these social network solutions, if our friends collude and attack, 
+they can determine who our other friends are. So it's advisable to create 
+separate ToxIDs for separate social networks - but that's advisable anyway.
+
+
+If we can't find enough hits to build onion paths, we'll have to use random 
+(possibly sybil) ones instead. Need to think about UI issues for making it 
+clear when we're doing this, and allowing the user to prevent it. If the user 
+does prevent it, they'll have to make FRs by manually pasting in a DHT key 
+provided by their potential friend.
+
+We use SybilGuarded nodes for onion paths. We could also use them as announce 
+nodes, making us resistant to that DoS attack as far as friends in the same 
+component go.
+
+
+# Applicability
+SG only works if we assume a well-connected network. This excludes a use case
+which is in reality common: a small group of friends, perhaps as small as 2,
+who want to use tox with each other.
+
+## SybilGuard
+
+Idea: once we have friends, use a version of SybilGuard, only using as onion 
+path nodes peers who can prove a link to us via (preferably multiple) random 
+paths.
+With some clever crypto (e.g. http://www.ics.uci.edu/~gts/paps/psi-ca.pdf is 
+highly relevant), it might be possible to do this without giving away much 
+information about our location in our connected component of the friend graph.
+
+Simple non-clever version: each peer generates SGIDs, which remain constant at 
+least until the friend graph changes but which are meant not to be publically 
+associated to the ToxID. When a friend relation is newly established, each 
+sends to the other a "tail sample", an unordered set of SGIDs. To obtain a 
+tail sample to send to my new friend F, I update the
+permutation \sigma of my friends by concatenating with a transposition of F 
+with a random friend (F included), take the tail sample of \sigma(F), add my 
+SGID, and remove a random element if the size limit has been exceeded (it's 
+important to do it in that order). I may also have to recompute a tail sample 
+for an existing friend, because my permutation has changed.
+The SGIDs are signing keys. We sign each SGID in a tail sample we receive, 
+then send the signatures back for propagation back down the chain. We 
+propagate a signature to a friend if the signee is in the tail sample we 
+got from the friend.
+Then we accept as being probably not sybil anyone who can prove that they have 
+an SGID which was signed by an SGID which is in a tail sample from one of our 
+friends.
+
+TODO: how to determine appropriate size of a tail sample?
+This is discussed in the SybilGuard paper.
+
+# Costs
+If we assume 160-bit hashes of SGIDs, and we use a tail sample size of 
+w=300 (enough for a million-node network, according to the SG paper), a tail 
+sample weighs 6KB. Each node has to relay a number of signatures quadratic in 
+w; recall that w is \Theta(n^{1/2}log(n)).
+For w=300, and 160-bit signatures, and estimating the number of relays as 
+(w/2)^2, that's 439KB sent and received between each edge.
+
+# Privacy
+
+We can confirm guessed identities of nodes in our routes by querying their 
+routes and comparing with our route. This reveals their distance from us.
+
+More generally, comparing the advertised routes of various nodes reveals a lot 
+of information about the friend graph.
+
+Looks like this renders inadvisable any SG-like scheme, in which whole routes 
+are advertised.
+
+
+## SG Variant
+
+# Unoptimised version
+
+Propagate SGIDs as in SG, again using sampling, so we obtain a sample of the 
+upstream SGIDs along each of our routes. But then propagate back the full 
+unordered list of our upstream SGIDs. Namely, we obtain such a set of SGIDs 
+from \sigma(F), and send to F the union of that with our upstream SGIDs, 
+then delete some at random if we think it's too big (see below).
+
+Now the verification algorithm is simple: a suspect proves they have an SGID 
+(which is the hash of a public key), and we check whether it is in a threshold 
+proportion of the sets we received from our edges.
+
+# Refreshing
+
+Each SGID is marked with a TTL, which is set to w each time it is added, and
+decays on each hop, with the SGID deleted rather than the TTL become
+negative.
+
+But this leaks information.
+Better: delete a random SGID each time we add a new one?
+Or have multiple overlapping sets (TODO: explicate)?
+
+# Costs
+
+We receive, send, and store roughly d*n SGIDs, where d is our degree and n is 
+the number of nodes in our "well-connected component". 8 bytes is probably big 
+enough for an SGID. So these costs are survivable but significant for a 
+million-node network, but pretty trivial for a thousand-node network. 
+
+This is a one-off cost. There are also on-going costs due to propagations of 
+changes in the network. We can send only diffs, and use the SybilGuard paper's 
+suggestion of composing the permutation with a transposition when 
+adding/deleting an edge to minimize changes, to keep these costs down.
+
+# Optimisations
+
+Could try to send a probabilistic structure like a Bloom filter rather than 
+the full set of SGIDs. But then an attacker who got a copy of the structure 
+could try to generate an SGID which would trigger a false positive, allowing 
+unboundedly many Sybils to be accepted. So we have to set the false positive 
+rate very low, but then there's no saving over just sending sets of hashes.
+
+# estimating w
+
+Procedure for determining weights: each node obtains a sample of likely-honest 
+nodes, taken from short random walks. Then on receiving SGIDs from an edge, we 
+
+... want to delete down to deal with sybils, but not throw away too much in 
+case our sample is unrepresentative; also want to throw in our own SGIDs 
+whether or not they're necessary, because it helps our friends.
+
+Is it actually enough to get a good proportion of this sample, which is biased 
+towards higher degree nodes? SG paper discusses this.
+
+# Bootstrapping
+
+No-one wants to continue a route which is near its start, because it means 
+giving away information about your friends...
+
+Inject fake SGIDs to make the numbers up and hide the genuine ones?
+
+# Analysis
+For the verification procedure, the only real change from SG is that we have 
+probabilistic path samples rather than determistic path intervals. But the 
+expected lifetime of an SGID along a path is still proportional to w, so the 
+asymptotic properties should be the same.
+
+In particular, a well-integrated node can easily create ~w Sybil SGIDs which 
+will be accepted, by passing them downstream along every edge.
+
+The estimation of w is quite different, so requires a new analysis. We wish to 
+show that it gives a sufficiently accurate estimate, even in the presence of a 
+Sybil attacker trying to force an overestimate.
+
+# Tracking
+Our SGID is a long-term identifier which can be linked to our DHT keys and our 
+IP addresses. Moreover, by listening to DHT searches, a DHT crawler could 
+build up a picture of the friend graph with nodes given by SGID. This isn't 
+all that much better than indexing by the ToxID pubkey.
+
+BUT spying on friend searches requires many nodes distributed around keyspace,
+i.e. a Sybil attack which is defeated by this scheme anyway!
+FIXME: only if we use it for DHT too... but then how do we handle searches for 
+friends not "in our well-connected component"? Restrict to SG for searches for 
+friends we can SG-verify? Not foolproof though, and if we relax the 
+restriction after a while we unnecessarily reveal our search if our friend is 
+just offline...
+
+Can mitigate the IP address tracking by having suspects not directly reveal
+their SGID, but only produce a token proving that they have an SGID. So the
+attacker can only track those in their SG neighbourhood (or the neighbourhoods 
+of those they've compromised...). See next subsection.
+
+Can we be cleverer?
+Might hope to find a system wherein we can prove that our SGID is contained in
+a set of SGIDs without revealing which SGID in that set it is. Would also want 
+to be able to replace random elements of the set with new elements, for 
+propagation. But then it's clearly impossible: we can keep replacing with 
+dummies until only one of the originals is left, then that uniquely identifies 
+the original.
+
+# Sketch
+
+Choose globally a number n which we will work modulo.
+Probably this should be ``rigid'' as in
+http://www.michaeldemare.com/pubs/owa.pdf .
+
+Choose a base b.
+
+// Obtain from edge
+// z := b^{\prod_i f_i} and y_j := b^{\prod_{i /= j} f_i} for each j,
+// where f_i are the SGIDs of previous nodes in the path (some of which may be
+// fake), in a random order.
+// If our SGID is f, we pass on z' := z^f, and, randomly permuted,
+// y_j' := y_j^f and z.
+
+Obtain from edge
+y_i := b^{f_i} for each i,
+where f_i are the SGIDs of previous nodes in the path (some of which may be 
+fake), in a random order.
+If our SGID is f, we pass on the y_i with b^f adjoined, randomly permuted.
+
+Then to verify a suspect, generate a random k, send the suspect b^k, they 
+return a random k' and b^k^{k'f} = b^{kk'f} = b^f^{kk'} where f is their SGID, 
+and we check whether this is equal to any y_i^{kk'}. Making standard discrete 
+log difficulty assumptions (FIXME: make precise), f is not revealed this way.
+
+(k' is there to prevent the tracking strategy of always using the same k)
+
+If b and n are global constants, can verify in all paths simultaneously.
+
+OR: just use nacl.
+Here's a simpler version of the above using just public-key authenticated 
+encryption.
+
+We directly pass SGIDs along paths. SGIDs are public keys.
+
+To verify a suspect, the verifier generates a keypair and shares the public 
+key with the suspect, who encrypts (using crypto_box) a null message to the 
+verifier, without presenting their SGID.
+The verifier then goes through the SGIDs in its lists trying to decrypt the 
+message (using crypto_box_open), using each as public key.
+
+This approach looks to be fairly costly in cpu though, and also in size - the 
+MAC is 32 bytes?
+
+## SybilLimit
+
+Offline version of SybilLimit, with signing.
+
+# Basic Protocol
+
+Each peer generates a secret which is used to generate permutations of the 
+edges from the node, one for each integer. The i-th route from a peer is 
+obtained by applying the i-th permutation at each node, with the initial edge 
+also determined by the initial node's secret and i. The length w of routes is 
+a universal constant (let's say 10). The final directed edge in a route is its 
+_tail_, and the final node is its _tip_. Each peer will use and accept only 
+the first r routes, but r is determined by each peer separately.
+
+Each tail (i.e. directed edge) gets a separate signing key.
+
+Peers send requests to and get replies from the tails of their routes. 
+Messages are sent with a plaintext payload, a route ID, the route direction 
+(forwards/backwards), and a TTL.
+
+Each peer registers with the tail of each of the r routes.
+To register, 
+
+# Benchmarking
+
+When sending along a random route a signature request, also optionally request 
+to send back their own tailset for use in benchmarking.
+
+
+
+# Costs
+SybilLimit is based on having many independent random routes, so the local 
+routing tables do need to be entirely regenerated when we add/delete an edge. 
+Generate new edge keys whenever the permutation changes. Then verifiers can 
+time out signatures and take new samples to replace them, dealing with a sybil 
+who stockpiles old signatures.
+
+Main cost then is probably the verification procedure itself. With r=10000, 
+simply using Bloom filters with a 1/r false positive rate still yields a cost 
+of ~23KB for a suspect to display its tail keys. Can a clever interactive 
+protocol check for collisions more efficiently?
+
+# Privacy
+
+Using paths of fixed length w is no good: we can find out the tail w-n steps 
+from us along route i, then determine that anyone registered with that tail 
+under route i is n step away from us in the other direction, and so using this 
+we can find the nodes on each backwards route and hence determine our 
+w-neighbourhood of the friend graph.
+
+Instead, we can use a Poisson process to determine when a route is to end; 
+that is, we accept a message rather than passing it on with a 1/w probability, 
+using the SLID of the sender and a secret of our own as input to the RNG. So 
+then on determining that someone is verified by a tail downstream on the ith 
+route, or on eavesdropping a SLID on its way down the ith route, all we can 
+conclude is that they lie somewhere upstream on the ith route, with decreasing 
+probabilities further out.
+
+This loses the neat 1-to-1 matching between tails and originators, but not by 
+much.
+
+But we still have the problem that the number of routes along which we see the 
+same peer is a very good estimator of their distance. From that we can get a 
+lot of information about at least our close neighbourhood of the friend graph.
+
+Probably (proof?) leaking this information is inevitable in any SL-based 
+system.
+
+Alternatively: no Poisson, but use TTL as input to the permutation generator. 
+Again this leaks information about distances of peers.
