@@ -418,9 +418,7 @@ events from a random pair of connection events.
 
 * **"independent occasion"**: $A$ uses a fresh independent IP address on the 
   second occasion, and the occasions are sufficiently separated in time.
-
-* **"independent third party**: $E$ not a Friend of $A$, and $E \neq B_i$.
-
+* **"independent third party"**: $E$ not a Friend of $A$, and $E \neq B_i$.
 * Motivation: Without PFFP, $E$ can track users and reconstruct the friend 
   graph.
 
@@ -428,6 +426,7 @@ events from a random pair of connection events.
 ## Achieving PFFP: basic idea
 
 Suggested by Grayhatter.
+<https://wiki.cmdline.org/doku.php?id=dht:new_friend_finding>
 
 Setup: $A$ and $B$ know each others' ID pubkeys, and actively co-operate to 
 exchange messages.
@@ -535,6 +534,23 @@ If we want to be promiscuous:
 This is flexible for different kinds of promiscuity. It could also be used as 
 e.g. an "invite code" intended for limited distribution.
 
+## Simplifying promiscuity
+We could use our ID pubkey as our public rdvkey.
+
+This simplifies promiscuity - on first adding a friend, we can try both at 
+the initial rdvkey and at their public rdvkey, and have a toggleable 
+"promiscuous mode" (intended for bots and those who really don't care about 
+the privacy consequences) in which we announce at our public rdvkey.
+
+Details: first generate an EdDSA signing keypair and then extract the 
+Curve25519 ID keypair using the homomorphic birationality of the curves, 
+crypto\_sign\_ed25519\_sk\_to\_curve25519 in libsodium. Annoyingly, libsodium 
+doesn't provide the reverse function for the public keys 
+("crypto\_sign\_curve25519\_pk\_to\_ed25519"), so we'd have to implement it 
+ourselves (theoretically this is just a couple of lines of modular 
+arithmetic), or get libsodium to.
+
+
 ## Complication 4: TCP
 * There is an Onion TCP packet accepted by TCP servers, allowing TCP-only 
   clients to use the onion.
@@ -552,6 +568,9 @@ e.g. an "invite code" intended for limited distribution.
 * Add mechanism for checking our announce nodes accept incoming connections?
 
 * Handling transition from onion.
+
+* Currently, we save known DHT nodes between sessions. This invalidates PFFP, 
+  and can be used to track us across sessions if our DHT view is poisoned.
 
 ## Bonus: DoS resistance
 * With the onion, your announce location is your ID pubkey, so anyone knowing 
